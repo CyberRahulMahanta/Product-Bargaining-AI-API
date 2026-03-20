@@ -1,15 +1,21 @@
 # main.py
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import Optional, List
 import uvicorn
 from datetime import datetime
 import logging
-
+import os
 from api_models import *
 from api_service import BargainingAPIService
 from fastapi.staticfiles import StaticFiles
+from config import Config
+from db_manager import DatabaseManager
+from fastapi import Depends
+from api_models import CreateUserRequest
+
+db_manager = DatabaseManager()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,19 +39,19 @@ app.add_middleware(
 
 # Serve the products folder at /products URL
 app.mount("/products", StaticFiles(directory="products"), name="products")
-
+print("Serving products from:", os.path.abspath("products"))
+print("Files:", os.listdir("products"))
 # Initialize service
 service = BargainingAPIService()
 
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting Bargaining AI API...")
+from contextlib import asynccontextmanager
 
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    logger.info("Starting Bargaining AI API...")
+    yield
     logger.info("Shutting down Bargaining AI API...")
+
 
 # Middleware for request logging
 @app.middleware("http")
@@ -66,6 +72,27 @@ async def health_check():
         "version": "1.0.0"
     }
 
+# User details endpoints
+
+# 🔹 GET USER
+@app.get("/user/{firebase_uid}")
+def get_user(firebase_uid: str):
+    user = db_manager.get_user_by_uid(firebase_uid)
+    if user:
+        return {
+            "success": True,
+            "data": user
+        }
+    return {
+        "success": False,
+        "message": "User not found"
+    }
+
+# 🔹 CREATE USER
+@app.post("/user")
+def create_user_api(data: CreateUserRequest):
+    return service.register_user(data)
+
 # Product endpoints
 @app.get("/api/products", tags=["Products"])
 async def get_products(category: Optional[str] = None):
@@ -74,17 +101,10 @@ async def get_products(category: Optional[str] = None):
         products = service.get_products(category)
         # If products are Pydantic models, convert them to dict
         products_list = [p.dict() if hasattr(p, "dict") else p for p in products]
-        return JSONResponse(content=products_list)  # ✅ Return JSON array directly
+        return JSONResponse(content=products_list)
     except Exception as e:
         logger.error(f"Error getting products: {e}")
         return JSONResponse(content=[])
-    except Exception as e:
-        logger.error(f"Error getting products: {e}")
-        return ApiResponse(
-            success=False,
-            message="Failed to get products",
-            error=str(e)
-        )
 
 @app.get("/api/products/{product_id}", response_model=ApiResponse, tags=["Products"])
 async def get_product(product_id: int):
@@ -335,7 +355,7 @@ async def general_exception_handler(request, exc):
             success=False,
             message="Internal server error",
             error=str(exc)
-        ).dict()
+        ).model_dump()
     )
 
 if __name__ == "__main__":

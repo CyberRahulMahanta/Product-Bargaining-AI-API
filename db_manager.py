@@ -103,6 +103,52 @@ class DatabaseManager:
             cursor.close()
             conn.close()
     
+    # User details and authentication
+    def get_user_by_uid(self, firebase_uid):
+        conn = self.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        try:
+            query = "SELECT * FROM users WHERE firebase_uid = %s"
+            cursor.execute(query, (firebase_uid,))
+            return cursor.fetchone()
+
+        except Error as e:
+            print(f"❌ Error fetching user: {e}")
+            return None
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    def create_user(self, firebase_uid, name, email):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            # check if exists
+            cursor.execute("SELECT * FROM users WHERE firebase_uid = %s", (firebase_uid,))
+            if cursor.fetchone():
+                return True
+
+            query = """
+            INSERT INTO users (firebase_uid, name, email)
+            VALUES (%s, %s, %s)
+            """
+            cursor.execute(query, (firebase_uid, name, email))
+            conn.commit()
+
+            return True
+
+        except Error as e:
+            print(f"❌ Error creating user: {e}")
+            conn.rollback()
+            return False
+
+        finally:
+            cursor.close()
+            conn.close()
+    
     # CONVERSATION OPERATIONS
     def create_conversation(self, session_id: str, product_id: int, initial_price: float) -> Optional[int]:
         """Start new conversation"""

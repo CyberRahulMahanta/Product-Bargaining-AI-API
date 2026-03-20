@@ -3,6 +3,23 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from enum import Enum
 
+class User(BaseModel):
+    name: str
+    email: str
+    phone: str
+    birthday: str
+    address: str
+    profile_image: str
+
+class UserResponse(BaseModel):
+    success: bool
+    data: User
+
+class CreateUserRequest(BaseModel):
+    firebase_uid: str
+    name: str
+    email: str
+
 class MessageRole(str, Enum):
     USER = "user"
     SHOPKEEPER = "shopkeeper"
@@ -44,6 +61,9 @@ class ProductInfo(BaseModel):
     stock_quantity: int
     image_url: Optional[str] = None
     popularity_score: float
+    available_colors: Optional[str] = None
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
 
 class ConversationMessage(BaseModel):
     """Conversation message model"""

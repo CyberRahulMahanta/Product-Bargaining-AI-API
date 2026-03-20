@@ -280,7 +280,11 @@ class BargainingAPIService:
             'warranty': product.get('warranty', '1 Year'),
             'stock_quantity': product.get('stock_quantity', 0),
             'image_url': product.get('image_url', ''),
-            'popularity_score': float(product.get('popularity_score', 0))
+            'popularity_score': float(product.get('popularity_score', 0)),
+                    # NEW FIELDS
+            'available_colors': product.get('available_colors'),
+            'rating': float(product.get('rating', 0)) if product.get('rating') else None,
+            'review_count': int(product.get('review_count', 0)) if product.get('review_count') else None
         }
     
     def _get_conversation_status(self, conversation_id: int) -> str:
@@ -295,3 +299,26 @@ class BargainingAPIService:
         finally:
             cursor.close()
             conn.close()
+
+    # user details and authentication
+    def fetch_user(self, firebase_uid):
+        user = self.db.get_user_by_uid(firebase_uid)
+
+        if not user:
+            return {"success": False, "message": "User not found"}
+
+        return {
+            "success": True,
+            "data": {
+                "name": user["name"],
+                "email": user["email"],
+                "phone": user.get("phone", ""),
+                "birthday": user.get("birthday", ""),
+                "address": user.get("address", ""),
+                "profile_image": user.get("profile_image", "")
+            }
+        }
+
+    def register_user(self, data):
+        self.db.create_user(data.firebase_uid, data.name, data.email)
+        return {"success": True, "message": "User created"}
