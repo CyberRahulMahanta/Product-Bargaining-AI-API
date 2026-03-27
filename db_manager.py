@@ -149,6 +149,83 @@ class DatabaseManager:
             cursor.close()
             conn.close()
     
+    
+    def update_user(self, firebase_uid, name, email, phone, birthday, address):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            query = """
+            UPDATE users
+            SET name=%s, email=%s, phone=%s, birthday=%s, address=%s
+            WHERE firebase_uid=%s
+            """
+            cursor.execute(query, (name, email, phone, birthday, address, firebase_uid))
+            conn.commit()
+
+            return True
+
+        except Error as e:
+            print(f"❌ Error updating user: {e}")
+            conn.rollback()
+            return False
+
+        finally:
+            cursor.close()
+            conn.close()
+        
+        
+    def update_user_image(self, firebase_uid, image_url):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            query = "UPDATE users SET profile_image=%s WHERE firebase_uid=%s"
+            cursor.execute(query, (image_url, firebase_uid))
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+    
+    
+    # order entering into database
+    def create_order(self, user_id, product_id, quantity, price, total_amount, color, negotiation_status, payment_id, payment_status):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            query = """
+                    INSERT INTO orders 
+                    (user_id, product_id, quantity, price, total_amount, color, negotiation_status, payment_id, payment_status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+
+            cursor.execute(query, (
+            user_id,
+            product_id,
+            quantity,
+            price,
+            total_amount,
+            color,
+            negotiation_status,
+            payment_id,
+            payment_status
+        ))
+
+            conn.commit()
+            return True
+
+        except Exception as e:
+            print(f"❌ Error creating order: {e}")
+            conn.rollback()
+            return False
+
+        finally:
+            cursor.close()
+            conn.close()
+            
+            
+            
     # CONVERSATION OPERATIONS
     def create_conversation(self, session_id: str, product_id: int, initial_price: float) -> Optional[int]:
         """Start new conversation"""

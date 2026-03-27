@@ -14,6 +14,9 @@ from config import Config
 from db_manager import DatabaseManager
 from fastapi import Depends
 from api_models import CreateUserRequest
+from fastapi import UploadFile, File
+import uuid
+from fastapi import Request
 
 db_manager = DatabaseManager()
 
@@ -43,6 +46,10 @@ print("Serving products from:", os.path.abspath("products"))
 print("Files:", os.listdir("products"))
 # Initialize service
 service = BargainingAPIService()
+
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 from contextlib import asynccontextmanager
 
@@ -93,6 +100,178 @@ def get_user(firebase_uid: str):
 def create_user_api(data: CreateUserRequest):
     return service.register_user(data)
 
+# create order for user
+
+class CreateOrderRequest(BaseModel):
+    user_id: str
+    product_id: int
+    quantity: int
+    price: float
+    total_amount: float
+    color: str
+    negotiation_status: str
+    payment_id: str         # 🔥 Must come from frontend
+    payment_status: str     # 🔥 Must come from frontend
+
+@app.post("/create_order")
+async def create_order(data: CreateOrderRequest):
+    try:
+        # ✅ Do NOT generate payment_id here
+        # ✅ Use the one sent from frontend (Razorpay)
+        payment_id = data.payment_id
+        payment_status = data.payment_status
+
+        success = db_manager.create_order(
+            user_id=data.user_id,
+            product_id=data.product_id,
+            quantity=data.quantity,
+            price=data.price,
+            total_amount=data.total_amount,
+            color=data.color,
+            negotiation_status=data.negotiation_status,
+            payment_id=payment_id,
+            payment_status=payment_status
+        )
+
+        if success:
+            return {
+                "success": True,
+                "message": "Order placed",
+                "payment_id": payment_id,
+                "payment_status": payment_status
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create order")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.put("/update_payment_status/{payment_id}")
+async def update_payment_status(payment_id: str, status: str):
+
+    conn = db_manager.get_connection()
+    cursor = conn.cursor()
+
+    try:
+        query = "UPDATE orders SET payment_status = %s WHERE payment_id = %s"
+        cursor.execute(query, (status, payment_id))
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Payment status updated"
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+    finally:
+        cursor.close()
+        conn.close()
+        
+
+# retrive users order
+
+@app.get("/orders/{user_id}")
+def get_orders(user_id: str):
+    try:
+        conn = db_manager.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+        SELECT
+            o.id,
+            o.total_amount,
+            o.payment_id,
+            o.payment_status,
+            o.created_at as payment_time,
+            p.name as product_name,
+            p.image_url as product_image
+        FROM orders o
+        JOIN products p ON o.product_id = p.id
+        WHERE o.user_id = %s
+        ORDER BY o.created_at DESC
+        """
+
+        cursor.execute(query, (user_id,))
+        orders = cursor.fetchall()
+
+        # Format datetime
+        for order in orders:
+            if isinstance(order["payment_time"], datetime):
+                order["payment_time"] = order["payment_time"].isoformat()
+
+        return {"success": True, "data": orders}
+
+    except Exception as e:
+        print("Error fetching orders:", e)
+        return {"success": False, "message": str(e)}
+
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.put("/user/{firebase_uid}")
+def update_user(firebase_uid: str, data: UserUpdate):
+
+    user = db_manager.get_user_by_uid(firebase_uid)
+
+    if not user:
+        return {
+            "success": False,
+            "message": "User not found"
+        }
+
+    # 🔥 Update fields
+    db_manager.update_user(
+        firebase_uid=firebase_uid,
+        name=data.name,
+        email=data.email,
+        phone=data.phone,
+        birthday=data.birthday,
+        address=data.address
+    )
+    
+    # creating order for user
+    
+
+    # Get updated user
+    updated_user = db_manager.get_user_by_uid(firebase_uid)
+
+    return {
+        "success": True,
+        "data": updated_user
+    }
+    
+    from fastapi import UploadFile, File
+
+@app.post("/user/{firebase_uid}/upload-image")
+async def upload_profile_image(firebase_uid: str, file: UploadFile = File(...)):
+    try:
+        # Save file
+        file_location = f"uploads/{firebase_uid}.jpg"
+
+        with open(file_location, "wb") as f:
+            f.write(await file.read())
+
+        # Save path in DB (NOT full URL)
+        image_path = f"uploads/{firebase_uid}.jpg"
+        db_manager.update_user_image(firebase_uid, image_path)
+
+        return {
+            "success": True,
+            "image_path": image_path
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+        
 # Product endpoints
 @app.get("/api/products", tags=["Products"])
 async def get_products(category: Optional[str] = None):
@@ -123,7 +302,160 @@ async def get_product(product_id: int):
             message="Product not found",
             error=str(e)
         )
+        
+        #  Add to cart request model
+class AddToCartRequest(BaseModel):
+    user_id: str
+    product_id: int
+    selected_color: str
+    
+# Add to cart endpoint code
 
+@app.post("/add_to_cart")
+async def add_to_cart(data: AddToCartRequest):
+    try:
+        conn = db_manager.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+        INSERT IGNORE INTO cart (user_id, product_id, selected_color)
+        VALUES (%s, %s, %s)
+        """
+
+        cursor.execute(
+            query,
+            (data.user_id, data.product_id, data.selected_color)
+        )
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Added to cart"
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+    finally:
+        cursor.close()
+        conn.close()
+        
+        
+# Add GET Cart API
+@app.get("/cart/{user_id}")
+def get_cart(user_id: str):
+    try:
+        conn = db_manager.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+        SELECT 
+            c.product_id as id,
+            c.selected_color,
+            c.added_at,
+            p.name,
+            p.selling_price,
+            p.image_url
+        FROM cart c
+        JOIN products p ON c.product_id = p.id
+        WHERE c.user_id = %s
+        ORDER BY c.added_at DESC
+        """
+
+        cursor.execute(query, (user_id,))
+        items = cursor.fetchall()
+
+        # Convert datetime
+        for item in items:
+            if isinstance(item["added_at"], datetime):
+                item["added_at"] = item["added_at"].isoformat()
+
+        return {
+            "success": True,
+            "data": items
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+    finally:
+        cursor.close()
+        conn.close()
+        
+        
+# Add DELETE Cart API
+
+@app.delete("/cart/{cart_id}")
+def delete_cart_item(cart_id: int):
+    try:
+        conn = db_manager.get_connection()
+        cursor = conn.cursor()
+
+        query = "DELETE FROM cart WHERE product_id = %s"
+        cursor.execute(query, (cart_id,))
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Item removed"
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# Deleting orders from database enpoint code
+
+@app.delete("/users/{user_id}/orders/{order_id}", tags=["Orders"])
+async def delete_order(user_id: str, order_id: int):
+
+    conn = db_manager.get_connection()
+    cursor = conn.cursor()
+
+    try:
+        print("DELETE DEBUG →", user_id, order_id)
+
+        query = """
+            DELETE FROM orders 
+            WHERE id = %s AND user_id = %s
+        """
+
+        cursor.execute(query, (order_id, user_id))
+        conn.commit()
+
+        print("Rows affected:", cursor.rowcount)
+
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Order not found or not authorized"
+            )
+
+        return {
+            "success": True,
+            "message": "Order deleted successfully"
+        }
+
+    except Exception as e:
+        print("ERROR:", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        cursor.close()
+        conn.close()
 # Negotiation endpoints
 @app.post("/api/negotiation/start", response_model=ApiResponse, tags=["Negotiation"])
 async def start_negotiation(request: StartNegotiationRequest):

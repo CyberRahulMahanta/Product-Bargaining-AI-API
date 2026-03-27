@@ -19,6 +19,13 @@ class CreateUserRequest(BaseModel):
     firebase_uid: str
     name: str
     email: str
+    
+class UserUpdate(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    birthday: Optional[str] = None
+    address: Optional[str] = None
 
 class MessageRole(str, Enum):
     USER = "user"
