@@ -132,3 +132,51 @@ class ApiResponse(BaseModel):
     message: str
     data: Optional[Any] = None
     error: Optional[str] = None
+    
+    
+# dynamic notifications
+class NotificationItem(BaseModel):
+    id: int
+    user_id: str
+    title: str
+    message: str
+    type: str
+    is_read: bool
+    created_at: str
+
+class NotificationListResponse(BaseModel):
+    success: bool
+    data: List[NotificationItem]
+    
+class BasicResponse(BaseModel):
+    success: bool
+    message: str
+
+class UnreadCountResponse(BaseModel):
+    success: bool
+    unread_count: int
+    
+class NotificationRequest(BaseModel):
+    user_id: str
+    title: str
+    message: str
+    type: str
+    
+    
+# coupon and shipping APIsclass ShippingMethodItem(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    amount: float
+    estimated_time: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CouponValidateResponse(BaseModel):
+    success: bool
+    valid: bool
+    code: Optional[str] = None
+    discount_amount: float = 0.0
+    message: str

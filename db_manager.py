@@ -1,4 +1,8 @@
 # db_manager.py
+from email.mime import message
+from multiprocessing.dummy import connection
+from turtle import title
+
 import mysql.connector
 from mysql.connector import pooling, Error
 import json
@@ -224,6 +228,185 @@ class DatabaseManager:
             cursor.close()
             conn.close()
             
+    # Notification dynamic function
+    def get_notifications_by_user(self, user_id: str):
+        conn = self.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        try:
+            query = """
+                SELECT id, user_id, title, message, type, is_read, created_at
+                FROM notifications
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                    """
+            cursor.execute(query, (user_id,))
+            rows = cursor.fetchall()
+
+            for row in rows:
+                row["is_read"] = bool(row["is_read"])
+                row["created_at"] = str(row["created_at"])
+
+            return rows
+
+        finally:
+            cursor.close()
+            conn.close()
+            
+    def mark_notification_as_read(self, notification_id: int):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            query = """
+            UPDATE notifications
+            SET is_read = 1
+            WHERE id = %s
+            """
+            cursor.execute(query, (notification_id,))
+            conn.commit()
+
+            return cursor.rowcount > 0
+        finally:
+            cursor.close()
+            conn.close()
+
+
+    def mark_all_notifications_as_read(self, user_id: str):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            query = """
+                UPDATE notifications
+                SET is_read = 1
+                WHERE user_id = %s AND is_read = 0
+                    """
+            cursor.execute(query, (user_id,))
+            conn.commit()
+
+            return cursor.rowcount
+        finally:
+            cursor.close()
+            conn.close()
+
+
+    def get_unread_notification_count(self, user_id: str):
+        conn = self.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        try:
+            query = """
+                SELECT COUNT(*) AS unread_count
+                FROM notifications
+                WHERE user_id = %s AND is_read = 0
+                    """
+            cursor.execute(query, (user_id,))
+            row = cursor.fetchone()
+
+            return row["unread_count"] if row else 0
+        finally:
+            cursor.close()
+            conn.close()
+            
+    # Deleting of notifications
+    def delete_notification(self, notification_id: int):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            query = "DELETE FROM notifications WHERE id = %s"
+            cursor.execute(query, (notification_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            cursor.close()
+            conn.close()
+            
+            
+    # inserting data into notifications table of negotiation start
+    
+    def add_notification(self, user_id: str, title: str, message: str, notif_type: str):
+        connection = self.get_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        try:
+            query = """
+            INSERT INTO notifications (title, message, type, is_read, created_at, user_id)
+            VALUES (%s, %s, %s, %s, NOW(), %s)
+            """
+            values = (
+                title,
+                message,
+                notif_type,
+                0,
+                user_id
+                )
+
+            cursor.execute(query, values)
+            connection.commit()
+
+            return {
+            "success": True,
+            "message": "Notification inserted successfully",
+            "notification_id": cursor.lastrowid
+            }
+
+        except Exception as e:
+            connection.rollback()
+            return {
+            "success": False,
+            "message": str(e)
+            }
+
+        finally:
+            cursor.close()
+            connection.close()
+            
+            
+    # coupon and shipping related functions
+    def get_shipping_methods(self):
+        conn = self.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        try:
+            query = """
+                SELECT id, name, description, amount, estimated_time
+                FROM shipping_methods
+                WHERE is_active = TRUE
+                ORDER BY amount ASC
+            """
+            cursor.execute(query)
+            return cursor.fetchall()
+
+        except Error as e:
+            print(f"❌ Error fetching shipping methods: {e}")
+            return []
+
+        finally:
+            cursor.close()
+            conn.close()
+            
+    def validate_coupon(self, code):
+        conn = self.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        try:
+            query = """
+                SELECT code, discount_amount
+                FROM coupons
+                WHERE code = %s AND is_active = TRUE
+            """
+            cursor.execute(query, (code.upper(),))
+            return cursor.fetchone()
+
+        except Error as e:
+            print(f"❌ Error validating coupon: {e}")
+            return None
+
+        finally:
+            cursor.close()
+            conn.close()
             
             
     # CONVERSATION OPERATIONS
@@ -252,37 +435,93 @@ class DatabaseManager:
             cursor.close()
             conn.close()
     
-    def add_message(self, conversation_id: int, turn_number: int, speaker: str, 
-                message_text: str, extracted_price: Optional[float] = None,
-                emotion: Optional[str] = None, intent: Optional[str] = None,
-                used_llm: bool = False) -> bool:
-        """Add message to conversation"""
+    def add_message(
+        self,
+        conversation_id: int,
+        turn_number: int,
+        speaker: str,
+        message_text: str,
+        extracted_price: Optional[float] = None,
+        emotion: Optional[str] = None,
+        intent: Optional[str] = None,
+        used_llm: bool = False
+    ) -> bool:
+        """Add message to conversation with full debugging"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         try:
-            cursor.execute("""
-                INSERT INTO conversation_messages 
-                (conversation_id, turn_number, speaker, message_text, 
+            print("\n========== ADD MESSAGE START ==========")
+            print(f"DEBUG conversation_id: {conversation_id}")
+            print(f"DEBUG turn_number: {turn_number}")
+            print(f"DEBUG speaker: {speaker}")
+            print(f"DEBUG message_text: {message_text}")
+            print(f"DEBUG extracted_price: {extracted_price}")
+            print(f"DEBUG emotion: {emotion}")
+            print(f"DEBUG intent: {intent}")
+            print(f"DEBUG used_llm: {used_llm}")
+
+            if not conversation_id:
+                raise Exception("conversation_id is missing or invalid")
+
+            insert_query = """
+                INSERT INTO conversation_messages
+                (conversation_id, turn_number, speaker, message_text,
                 extracted_price, emotion, intent, used_llm, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            """, (conversation_id, turn_number, speaker, message_text, 
-                extracted_price, emotion, intent, used_llm))
-            
-            # Update conversation turn count
-            cursor.execute("""
-                UPDATE conversations 
-                SET turns_count = %s 
+            """
+
+            insert_values = (
+                conversation_id,
+                turn_number,
+                speaker,
+                message_text,
+                extracted_price,
+                emotion,
+                intent,
+                used_llm
+            )
+
+            print(f"DEBUG insert_query: {insert_query}")
+            print(f"DEBUG insert_values: {insert_values}")
+
+            cursor.execute(insert_query, insert_values)
+            print("DEBUG message inserted into conversation_messages")
+
+            update_query = """
+                UPDATE conversations
+                SET turns_count = %s
                 WHERE id = %s
-            """, (turn_number, conversation_id))
-            
+            """
+
+            update_values = (turn_number, conversation_id)
+
+            print(f"DEBUG update_query: {update_query}")
+            print(f"DEBUG update_values: {update_values}")
+
+            cursor.execute(update_query, update_values)
+            print("DEBUG conversations.turns_count updated")
+
             conn.commit()
+            print("DEBUG database commit successful")
+            print("========== ADD MESSAGE SUCCESS ==========\n")
+
             return True
-            
+
         except Error as e:
-            print(f"❌ Error adding message: {e}")
+            print("========== ADD MESSAGE MYSQL ERROR ==========")
+            print(f"MYSQL ERROR: {e}")
+            print("============================================\n")
             conn.rollback()
             return False
+
+        except Exception as e:
+            print("========== ADD MESSAGE GENERAL ERROR ==========")
+            print(f"GENERAL ERROR: {e}")
+            print("==============================================\n")
+            conn.rollback()
+            return False
+
         finally:
             cursor.close()
             conn.close()

@@ -1,4 +1,6 @@
 # api_service.py
+from flask import session
+
 from hybrid_bargain_ai import HybridBargainAI
 from db_manager import DatabaseManager
 from typing import Dict, Optional, List, Any
@@ -15,20 +17,46 @@ class BargainingAPIService:
         self.session_timeout = 3600  # 1 hour timeout
         
     def create_session(self, product_id: int, customer_id: Optional[str] = None) -> Dict[str, Any]:
-        """Create a new bargaining session"""
         try:
-            # Generate unique session ID
+            print("\n========== CREATE SESSION START ==========")
+            print(f"DEBUG product_id: {product_id}")
+            print(f"DEBUG customer_id: {customer_id}")
+
             session_id = str(uuid.uuid4())
-            
-            # Initialize AI
+            print(f"DEBUG generated session_id: {session_id}")
+
             ai = HybridBargainAI(product_id, session_id)
-            
-            # Store customer ID if provided
+            print("DEBUG HybridBargainAI initialized successfully")
+
             if customer_id:
                 ai.customer_fingerprint = customer_id
                 ai.customer_profile = self.db.get_or_create_customer_profile(customer_id)
-            
-            # Store session with product info
+                print(f"DEBUG customer profile loaded: {ai.customer_profile}")
+            else:
+                print("DEBUG customer_id not provided, skipping customer profile")
+
+            product = self.db.get_product(product_id)
+            print(f"DEBUG fetched product: {product}")
+
+            if not product:
+                raise Exception(f"Product not found for product_id={product_id}")
+
+            product_info = self._format_product(product)
+            print(f"DEBUG formatted product_info: {product_info}")
+
+            conversation_id = self.db.create_conversation(
+                session_id=session_id,
+                product_id=product_id,
+                initial_price=product['selling_price']
+            )
+            print(f"DEBUG conversation_id created: {conversation_id}")
+
+            if not conversation_id:
+                raise Exception("Conversation not created in database")
+
+            ai.conversation_id = conversation_id
+            print(f"DEBUG ai.conversation_id set to: {ai.conversation_id}")
+
             self.active_sessions[session_id] = {
                 'ai': ai,
                 'product_id': product_id,
@@ -36,60 +64,113 @@ class BargainingAPIService:
                 'last_active': datetime.now(),
                 'customer_id': customer_id
             }
-            
-            # Get product info
-            product = self.db.get_product(product_id)
-            
-            # Format product for response
-            product_info = self._format_product(product)
-            
-            # Welcome message
-            welcome = f"Namaste ji! {product['name']} ke liye ₹{product['selling_price']:,.0f} hai. Kaise madad kar sakta hoon?"
-            
-            return {
+            print(f"DEBUG session stored in active_sessions: {session_id}")
+
+            welcome = (
+                f"Namaste ji! {product['name']} ke liye ₹{product['selling_price']:,.0f} hai. "
+                f"Kaise madad kar sakta hoon?"
+            )
+            print(f"DEBUG welcome message: {welcome}")
+
+            saved = self.db.add_message(
+                conversation_id=conversation_id,
+                turn_number=1,
+                speaker="shopkeeper",
+                message_text=welcome,
+                extracted_price=float(product['selling_price']),
+                intent="welcome"
+            )
+            print(f"DEBUG welcome message saved result: {saved}")
+
+            if not saved:
+                raise Exception("Welcome message not saved in database")
+
+            ai.turn_count = 1
+            print(f"DEBUG ai.turn_count set to: {ai.turn_count}")
+
+            response_data = {
                 'session_id': session_id,
-                'conversation_id': ai.conversation_id,
+                'conversation_id': conversation_id,
                 'product': product_info,
                 'initial_price': float(product['selling_price']),
                 'welcome_message': welcome,
                 'timestamp': datetime.now().isoformat()
             }
-            
+
+            print(f"DEBUG create_session response: {response_data}")
+            print("========== CREATE SESSION SUCCESS ==========\n")
+
+            return response_data
+
         except Exception as e:
+            print("========== CREATE SESSION ERROR ==========")
+            print(f"ERROR in create_session: {str(e)}")
+            print("==========================================\n")
             raise Exception(f"Failed to create session: {str(e)}")
     
     def process_message(self, session_id: str, product_id: int, message: str) -> Dict[str, Any]:
-        """Process a bargaining message - requires both session_id and product_id"""
-        
-        # Get session
+
         session = self._get_session(session_id)
-        
-        # If session doesn't exist, create a new one
+
         if not session:
-            print(f"Session {session_id} not found, creating new session for product {product_id}")
-            session_data = self.create_session(product_id)
-            session_id = session_data['session_id']
-            session = self._get_session(session_id)
-        
-        # Verify product matches
+            raise Exception("Session expired. Please restart negotiation.")
+
         if session['product_id'] != product_id:
-            # If product doesn't match, create new session for this product
-            print(f"Product mismatch: session has {session['product_id']}, request has {product_id}. Creating new session.")
-            session_data = self.create_session(product_id)
-            session_id = session_data['session_id']
-            session = self._get_session(session_id)
-        
+            raise Exception("Product mismatch. Restart negotiation.")
+
         ai = session['ai']
-        
-        # Process bargaining
+
+        if not ai.conversation_id:
+            raise Exception("Conversation ID missing")
+
+        print("\n========== PROCESS MESSAGE START ==========")
+        print(f"DEBUG message: {message}")
+
+        # 👉 ONLY AI processes (NO DB SAVE HERE)
         status, price, response = ai.bargain(message)
-        
-        # Update last active
+
+        print(f"DEBUG AI response: {response}")
+        print(f"DEBUG price: {price}")
+        print(f"DEBUG status: {status}")
+
+        # 👉 TURN NUMBER
+        current_turn = ai.turn_count
+
+        # ✅ SAVE CUSTOMER MESSAGE (ONCE)
+        self.db.add_message(
+            conversation_id=ai.conversation_id,
+            turn_number=current_turn,
+            speaker="customer",
+            message_text=message,
+            extracted_price=getattr(ai, "last_extracted_price", None),
+            emotion=getattr(ai, "last_emotion", None),
+            intent=getattr(ai, "last_intent", None)
+        )
+
+        # ✅ SAVE SHOPKEEPER MESSAGE (ONCE)
+        self.db.add_message(
+            conversation_id=ai.conversation_id,
+            turn_number=current_turn,
+            speaker="shopkeeper",
+            message_text=response,
+            extracted_price=float(price) if price else None,
+            intent=status.lower() if status else None
+        )
+
         session['last_active'] = datetime.now()
-        
-        # Get conversation summary
-        summary = ai.get_conversation_summary()
-        
+
+        # ✅ SAVE FINAL DEAL
+        if status in ["ACCEPT", "REJECT", "WALK_AWAY"]:
+            print("DEBUG saving final conversation result")
+
+            self.db.complete_conversation(
+                conversation_id=ai.conversation_id,
+                final_price=float(price),
+                status="completed" if status == "ACCEPT" else "failed"
+            )
+
+        print("========== PROCESS MESSAGE END ==========\n")
+
         return {
             'session_id': session_id,
             'conversation_id': ai.conversation_id,

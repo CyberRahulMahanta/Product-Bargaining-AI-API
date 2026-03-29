@@ -456,6 +456,95 @@ async def delete_order(user_id: str, order_id: int):
     finally:
         cursor.close()
         conn.close()
+        
+# notification endpoint
+@app.get("/api/notifications/{user_id}", response_model=NotificationListResponse)
+def get_notifications(user_id: str):
+    try:
+        notifications = db_manager.get_notifications_by_user(user_id)
+        return {
+            "success": True,
+            "data": notifications
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.put("/api/notifications/read/{notification_id}", response_model=BasicResponse)
+def mark_notification_read(notification_id: int):
+    try:
+        updated = db_manager.mark_notification_as_read(notification_id)
+
+        if not updated:
+            return {
+                "success": False,
+                "message": "Notification not found"
+            }
+
+        return {
+            "success": True,
+            "message": "Notification marked as read"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/notifications/read-all/{user_id}", response_model=BasicResponse)
+def mark_all_notifications_read(user_id: str):
+    try:
+        updated_count = db_manager.mark_all_notifications_as_read(user_id)
+
+        return {
+            "success": True,
+            "message": f"{updated_count} notification(s) marked as read"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notifications/unread-count/{user_id}", response_model=UnreadCountResponse)
+def get_unread_count(user_id: str):
+    try:
+        count = db_manager.get_unread_notification_count(user_id)
+
+        return {
+            "success": True,
+            "unread_count": count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    
+# deleting notifications endpoint
+@app.delete("/api/notifications/{notification_id}", response_model=BasicResponse)
+def delete_notification(notification_id: int):
+    try:
+        deleted = db_manager.delete_notification(notification_id)
+
+        if not deleted:
+            return {
+                "success": False,
+                "message": "Notification not found"
+            }
+
+        return {
+            "success": True,
+            "message": "Notification deleted successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# inserting negotiation for starting of negotiation
+
+@app.post("/add_notification")
+def add_notification(data: NotificationRequest):
+    return db_manager.add_notification(
+        user_id=data.user_id,
+        title=data.title,
+        message=data.message,
+        notif_type=data.type
+    )
+    
+    
 # Negotiation endpoints
 @app.post("/api/negotiation/start", response_model=ApiResponse, tags=["Negotiation"])
 async def start_negotiation(request: StartNegotiationRequest):
@@ -538,6 +627,40 @@ async def reset_negotiation(request: ResetNegotiationRequest):
             error=str(e)
         )
 
+# coupon and shipping endpoints
+@app.get("/api/shipping-methods")
+def get_shipping_methods():
+    data = db_manager.get_shipping_methods()
+
+    return {
+        "success": True,
+        "data": data
+    }
+
+from fastapi import Query
+
+@app.get("/api/coupons/validate")
+def validate_coupon(code: str = Query(...)):
+    coupon = db_manager.validate_coupon(code)
+
+    if not coupon:
+        return {
+            "success": True,
+            "valid": False,
+            "code": None,
+            "discount_amount": 0.0,
+            "message": "Invalid coupon code"
+        }
+
+    return {
+        "success": True,
+        "valid": True,
+        "code": coupon["code"],
+        "discount_amount": float(coupon["discount_amount"]),
+        "message": f"{coupon['code']} applied successfully"
+    }
+    
+    
 # Analytics endpoints
 @app.get("/api/analytics", response_model=ApiResponse, tags=["Analytics"])
 async def get_analytics(

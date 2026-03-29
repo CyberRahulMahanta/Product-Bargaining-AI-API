@@ -563,15 +563,6 @@ class HybridBargainAI:
         # Save customer message to DB
         analysis = self.analyze_customer(user_text)
         
-        self.db.add_message(
-            conversation_id=self.conversation_id,
-            turn_number=self.turn_count,
-            speaker='customer',
-            message_text=user_text,
-            extracted_price=analysis['offer'],
-            emotion=analysis['emotion'],
-            intent=analysis['intent']
-        )
         
         # Get conversation history for context
         conversation_history = self.db.get_conversation_history(self.conversation_id)
@@ -603,12 +594,6 @@ class HybridBargainAI:
             response = f"🎉 Wah bhai! Deal pakki! ₹{analysis['offer']:,.0f} me aapka!"
             status = "ACCEPT"
             
-            # Complete conversation in DB
-            self.db.complete_conversation(
-                conversation_id=self.conversation_id,
-                final_price=self.current_price,
-                status='completed'
-            )
             
             # Update customer profile
             self.db.update_customer_profile(self.customer_fingerprint, success=True)
@@ -618,22 +603,8 @@ class HybridBargainAI:
             response = "Koi baat nahi bhai. Kabhi aur aana! 🙏"
             status = "WALK_AWAY"
             
-            self.db.complete_conversation(
-                conversation_id=self.conversation_id,
-                final_price=self.current_price,
-                status='walked_away'
-            )
-            
             self.db.update_customer_profile(self.customer_fingerprint, success=False)
         
-        # Save shopkeeper response to DB
-        self.db.add_message(
-            conversation_id=self.conversation_id,
-            turn_number=self.turn_count,
-            speaker='shopkeeper',
-            message_text=response,
-            used_llm=used_llm
-        )
         
         return status, self.current_price, response
     
